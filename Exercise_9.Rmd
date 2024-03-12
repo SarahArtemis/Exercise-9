@@ -1,0 +1,150 @@
+---
+title: "Exercise 9"
+author: "Sarah"
+date: "2024-03-07"
+output: html_document
+---
+Load in libraries
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(broom)
+library(skimr)
+library(infer)
+```
+1.Pull in data and do 5 number summary
+```{R}
+f<-"https://raw.githubusercontent.com/difiore/ada-2024-datasets/main/Street_et_al_2017.csv"
+d<-read.csv(f, header=TRUE)
+
+(sum<-skim(d))
+```
+2. Plot ECV against multiple variables
+```{R}
+par(mfrow = c(2, 2))
+plot(d$Group_size, d$ECV)
+plot(d$Longevity, d$ECV)
+plot(d$Weaning, d$ECV)
+plot(d$Repro_lifespan, d$ECV)
+
+```
+
+3. Remove NAs and calculate beta1 and beta0 by hand.
+```{R}
+s<-d%>%filter(!is.na(Group_size) & !is.na(ECV))
+
+(b1<-cov(s$Group_size, s$ECV)/var(s$Group_size))
+
+(b0<-mean(s$ECV)-(b1*mean(s$Group_size)))
+```
+4. Confirm results with lm().
+```{R}
+m<-lm(formula = ECV~Group_size, data=s)
+tidy(m)
+```
+5. Repeat the regression analysis for “catarrhines”, “platyrrhines”, and “strepsirhines”. Do the coefficients differ among groups? Yes. We could use a permutation test to further explore the different coefficients among groups.
+```{R}
+Cat<-filter(s, Taxonomic_group=="Catarrhini")
+Plat<-filter(s, Taxonomic_group=="Platyrrhini")
+Strep<-filter(s, Taxonomic_group=="Strepsirhini")
+
+m_c<-lm(formula = ECV~Group_size, data=Cat)
+m_p<-lm(formula = ECV~Group_size, data=Plat)
+m_s<-lm(formula = ECV~Group_size, data=Strep)
+
+tidy(m_c)
+tidy(m_p)
+tidy(m_s)
+```
+6. For ECV vs Social group size, calculate the SE for the slope coefficient, the 95% CI, and the correlation coefficient by hand. Then compare to the lm() function. 
+```{R}
+SSY<-sum((m$model$ECV-mean(m$model$ECV))^2)
+SSR<-sum((m$fitted.values-mean(m$mode$ECV))^2)
+SSE<-sum((m$model$ECV-m$fitted.values)^2)
+
+dfy<-nrow(s)-1
+dfr<-1
+dfe<-nrow(s)-(dfr+1)
+
+MSY<- SSY/dfy
+MSR<- SSR/dfr
+MSE<- SSE/dfe
+
+f_ratio<-MSR/MSE
+
+p<-pf(q=f_ratio, df1=dfr, df2=dfe, lower.tail = FALSE)
+
+(sqrt(rsq<-SSR/SSY)) #correlation coefficient
+
+SSX<-sum((m$model$Group_size-mean(m$model$Group_size))^2)
+
+(SE_b1<-sqrt(MSE/SSX)) #SE for slope coefficient
+
+alpha <- 0.05
+
+m.summary <- tidy(m)
+
+lower <- m.summary$estimate - qt(1 - alpha/2, df = nrow(s) - 2) * m.summary$std.error
+upper <- m.summary$estimate + qt(1 - alpha/2, df = nrow(s) - 2) * m.summary$std.error
+CI <- cbind(lower, upper) 
+rownames(CI) <- c("Intercept", "Group_size")
+CI #95% CI
+
+summary(m)
+```
+7. Do 1000 permutations to generate a null sampling distribution for the slope coefficient. We need to permute group size with ECV. What is the p value associated with your original slope coefficient? 
+```{R}
+permuted.slope <- s %>%
+  specify(ECV ~ Group_size) %>%
+  hypothesize(null = "independence") %>%
+  generate(reps = 1000, type = "permute") %>%
+  calculate(stat = "slope")
+
+head(permuted.slope)
+
+alpha <- 0.05
+confidence_level <- 1 - alpha
+p_lower <- alpha/2
+p_upper <- 1 - (alpha/2)
+degrees_of_freedom <- nrow(s) - 2
+critical_value <- qt(p_upper, df = degrees_of_freedom)
+
+original.slope <- lm(data = s, ECV ~ Group_size) %>%
+  tidy(conf.int = TRUE, conf.level = confidence_level)%>%
+  filter(term == "Group_size")
+original.slope
+
+permuted.slope.summary <- permuted.slope %>%
+  summarize(estimate = mean(stat), 
+            std.error = sd(stat),
+            lower = estimate - std.error * critical_value,
+            upper = estimate + std.error * critical_value)
+permuted.slope.summary
+
+(p.value <- permuted.slope %>%
+    get_p_value(obs_stat = original.slope$estimate, direction="two_sided"))
+
+```
+8. Use bootstrapping to generate a 95% CI for your estimate of the slope coefficient using both the percentile method and the theory-based method. Do these CIs suggest that your slope coefficient is different from zero? Yes, both CI intervals are above 0. 
+```{R}
+boot.slope <- s %>%
+  specify(ECV ~ Group_size) %>%
+  generate(reps = 1000, type = "bootstrap") %>%
+  calculate(stat = "slope")
+
+head(boot.slope)
+
+
+boot.slope.summary <- boot.slope %>%
+  summarize(estimate = mean(stat), std.error = sd(stat), 
+    lower = estimate - std.error * critical_value, 
+    upper = estimate + std.error * critical_value,
+    boot.lower = quantile(stat, p_lower),
+    boot.upper = quantile(stat, p_upper)
+  )
+
+boot.slope.summary
+
+(CI.percentile <- get_ci(boot.slope, level = 1 - alpha, type = "percentile"))
+
+(CI.theory <- get_ci(boot.slope, level = 1 - alpha, type = "se", point_estimate = pull(boot.slope.summary, estimate)))
+```
